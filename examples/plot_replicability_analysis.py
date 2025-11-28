@@ -161,7 +161,7 @@ plt.show()
 # Computing and plotting factor similarity (alt.)
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 # There is an alternative way to estimate the replicability of the uncovered patterns
-# that includes the mode we are splitting within. When comparing two factorizations in
+# that includes the mode we are splitting within :cite:p:`reprref4`. When comparing two factorizations in
 # terms of FMS, we can include the previously skipped factor by using only the indices
 # present in both subsets.
 
