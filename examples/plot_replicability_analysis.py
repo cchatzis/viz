@@ -4,9 +4,9 @@
 Replicability analysis
 ----------------
 
-This example desrcibes how replicability of patterns can be used to guide the component selection process for PARAFAC models :cite:p:`reprref1, reprref2`.
+This example desrcibes how replicability of patterns can be used to guide the component selection process for PARAFAC models :cite:p:`reprref1, reprref2, reprref3`.
 
-This process evaluates the consistency of the uncovered patterns by fitting the model to different subsets of the data. The rationale is that if the appropriate number of components is used, the uncovered patterns should be consistent. This can be seen as a more strict extension of `split-half analysis <https://tensorly.org/viz/stable/auto_examples/plot_split_half_analysis.html>`_ where a higher number of smaller subsets of the input are removed.
+This process evaluates the consistency of the uncovered patterns by fitting the model to different subsets of the data. The rationale is that if the appropriate number of components is used, the uncovered patterns should be consistent. This can be seen as an extension of `split-half analysis <https://tensorly.org/viz/stable/auto_examples/plot_split_half_analysis.html>`_ where a higher number of smaller subsets of the input are removed.
 """
 
 ###############################################################################
@@ -39,7 +39,6 @@ def fit_many_parafac(X, num_components, num_inits=5):
             n_iter_max=1000,
             tol=1e-8,
             init="random",
-            orthogonalise=True,
             linesearch=True,
             random_state=i,
         )
@@ -56,17 +55,21 @@ def fit_many_parafac(X, num_components, num_inits=5):
 cp_tensor, dataset = tlviz.data.simulated_random_cp_tensor((30, 40, 25), 3, noise_level=0.3, labelled=True)
 
 ###############################################################################
+# .. figure:: /_static/notebook_figures/replicability.jpg
+# Illustration of the replicability check, taken from :cite:p:`reprref3`.
+#
+
+###############################################################################
 # The replicability analysis boils down to the following steps:
 #
 # 1. Split the data in a (user-chosen) mode into :math:`N` folds (user-chosen).
-# 2. Create :math:`N` train subsets by subtracting each fold from the complete
-#    dataset.
-# 3. Fit multiple initializations to each train subset and choose the *best* run
+# 2. Create :math:`N` subsets by subtracting each fold from the complete dataset.
+# 3. Fit multiple initializations to each subset and choose the *best* run
 #    according to lowest loss (total of :math:`N` *best* runs).
-# 4. Repeat the above process :math:`M` times (user-chosen), to find a total of
-#    :math:`M N` *best* runs.
-# 5. Compare, in terms of FMS, the factorization to evaluate the replicability
-#    of the uncovered patterns.
+# 4. Compare, in terms of FMS, the best runs across the different subsets
+#    to evaluate the replicability of the uncovered patterns (:math:`\binom{N}{2}` comparisons).
+# 5. Repeat the above process :math:`M` times (user-chosen), to find a total of
+#    :math:`M \binom{N}{2}` comparisons.
 
 
 ###############################################################################
@@ -86,22 +89,32 @@ for rank in [2, 3, 4, 5]:
 
     rskf = RepeatedKFold(n_splits=splits, n_repeats=repeats, random_state=1)
 
-    models[rank] = []
-    split_indices[rank] = []
+    models[rank] = {}
+    split_indices[rank] = {}
 
-    for train_index, _ in rskf.split(dataset):
+    for split_no, (train_index, _) in enumerate(rskf.split(dataset)):
+        repeat_no = split_no // splits
 
         # Sort rows for consistent ordering (not necessary)
 
         sorted_train_index = sorted(train_index)
-        split_indices[rank].append(sorted_train_index)
         train = dataset[sorted_train_index]
 
-        train = train / tl.norm(train)  # Normalize the tensor without leaking info from other folds
+        train = train / tl.norm(train)  # Pre-process the tensor without leaking info from other folds
 
         current_models = fit_many_parafac(train.data, rank)
         current_model = tlviz.multimodel_evaluation.get_model_with_lowest_error(current_models, train)
-        models[rank].append(current_model)
+
+        if repeat_no not in models[rank].keys():
+            models[rank][repeat_no] = []
+
+        models[rank][repeat_no].append(current_model)
+
+        if repeat_no not in split_indices[rank].keys():
+            split_indices[rank][repeat_no] = []
+
+        split_indices[rank][repeat_no].append(sorted_train_index)
+
 
 ###############################################################################
 # Often, the mode one will be splitting within refers to different samples
@@ -123,11 +136,12 @@ for rank in [2, 3, 4, 5]:
 replicability_stability = {}
 for rank in [2, 3, 4, 5]:
     replicability_stability[rank] = []
-    for i, cp_i in enumerate(models[rank]):
-        for j, cp_j in enumerate(models[rank]):
-            if i < j:  # include every pair only once and omit i == j
-                fms = tlviz.factor_tools.factor_match_score(cp_i, cp_j, consider_weights=False, skip_mode=0)
-                replicability_stability[rank].append(fms)
+    for repeat_no in models[rank].keys():
+        for i, cp_i in enumerate(models[rank][repeat_no]):
+            for j, cp_j in enumerate(models[rank][repeat_no]):
+                if i < j:  # include every pair only once and omit i == j
+                    fms = tlviz.factor_tools.factor_match_score(cp_i, cp_j, consider_weights=False, skip_mode=0)
+                    replicability_stability[rank].append(fms)
 
 ranks = sorted(replicability_stability.keys())
 data = [np.ravel(replicability_stability[r]) for r in ranks]
@@ -149,37 +163,38 @@ plt.show()
 # There is an alternative way to estimate the replicability of the uncovered patterns
 # that includes the mode we are splitting within. When comparing two factorizations in
 # terms of FMS, we can include the previously skipped factor by using only the indices
-# presend in both subsets.
+# present in both subsets.
 
 replicability_stability_alt = {}
 for rank in [2, 3, 4, 5]:
     replicability_stability_alt[rank] = []
-    for i, cp_i in enumerate(models[rank]):
-        for j, cp_j in enumerate(models[rank]):
-            if i < j:  # include every pair only once and omit i == j
+    for repeat_no in models[rank].keys():
+        for i, cp_i in enumerate(models[rank][repeat_no]):
+            for j, cp_j in enumerate(models[rank][repeat_no]):
+                if i < j:  # include every pair only once and omit i == j
 
-                weights_i, (A_i, B_i, C_i) = cp_i
-                weights_j, (A_j, B_j, C_j) = cp_j
+                    weights_i, (A_i, B_i, C_i) = cp_i
+                    weights_j, (A_j, B_j, C_j) = cp_j
 
-                indices_subset_i = sorted(split_indices[rank][i])
-                indices_subset_j = sorted(split_indices[rank][j])
+                    indices_subset_i = sorted(split_indices[rank][repeat_no][i])
+                    indices_subset_j = sorted(split_indices[rank][repeat_no][j])
 
-                common_indices = sorted(list(set(indices_subset_i).intersection(set(indices_subset_j))))
+                    common_indices = sorted(list(set(indices_subset_i).intersection(set(indices_subset_j))))
 
-                indices2use_i = []
-                indices2use_j = []
+                    indices2use_i = []
+                    indices2use_j = []
 
-                for common_idx in common_indices:
-                    indices2use_i.append(indices_subset_i.index(common_idx))
-                    indices2use_j.append(indices_subset_j.index(common_idx))
+                    for common_idx in common_indices:
+                        indices2use_i.append(indices_subset_i.index(common_idx))
+                        indices2use_j.append(indices_subset_j.index(common_idx))
 
-                A_i = A_i[indices2use_i, :]
-                A_j = A_j[indices2use_j, :]
+                    A_i = A_i[indices2use_i, :]
+                    A_j = A_j[indices2use_j, :]
 
-                fms = tlviz.factor_tools.factor_match_score(
-                    (weights_i, (A_i, B_i, C_i)), (weights_j, (A_j, B_j, C_j)), consider_weights=False
-                )
-                replicability_stability_alt[rank].append(fms)
+                    fms = tlviz.factor_tools.factor_match_score(
+                        (weights_i, (A_i, B_i, C_i)), (weights_j, (A_j, B_j, C_j)), consider_weights=False
+                    )
+                    replicability_stability_alt[rank].append(fms)
 
 ranks = sorted(replicability_stability_alt.keys())
 data = [np.ravel(replicability_stability_alt[r]) for r in ranks]
@@ -194,7 +209,7 @@ plt.show()
 ###############################################################################
 # ``common_indices`` contains the indices (e.g. samples) present in both subsets,
 # but since the position of each index can change (e.g. sample no 3 is not guaranteeed at
-# the third position in all subsets as the first and second sampled might be omitted) we need to
+# the third position in all subsets as the first and second samples might be omitted) we need to
 # utilize the indices in the original tensor input.
 #
-# Simialar results can be also observed here in terms of the replicability of the patterns.
+# Similar results can be also observed here in terms of the replicability of the patterns.
